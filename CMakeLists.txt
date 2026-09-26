@@ -804,6 +804,13 @@ endif()
 
 include(CoverageReport)
 
+option(DXC_ENABLE_NUGET_LAYOUT
+  "Add an install target that produces a Microsoft.Direct3D.DXC-compatible SDK layout"
+  OFF)
+if(DXC_ENABLE_NUGET_LAYOUT)
+  include(DxcNuGet)
+endif()
+
 # HLSL Change begin - Set default distribution value.
 set(LLVM_DISTRIBUTION_COMPONENTS "dxc;dxcompiler;dxc-headers" CACHE STRING "")
 # HLSL Change end - Set default distribution value.

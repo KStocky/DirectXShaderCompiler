@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <PropertyGroup>
+    <Microsoft_Direct3D_DXC_SkipIncludeDir Condition="$(Platform.Contains('Gaming.Xbox.'))">true</Microsoft_Direct3D_DXC_SkipIncludeDir>
+  </PropertyGroup>
+  <ItemDefinitionGroup Condition="'$(Microsoft_Direct3D_DXC_SkipIncludeDir)' != 'true'">
+    <ClCompile>
+      <AdditionalIncludeDirectories>$(MSBuildThisFileDirectory)include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+    </ClCompile>
+    <Link>
+      <AdditionalLibraryDirectories>$(MSBuildThisFileDirectory)lib\$(PlatformTarget);%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+      <AdditionalDependencies>dxcompiler.lib;%(AdditionalDependencies)</AdditionalDependencies>
+    </Link>
+  </ItemDefinitionGroup>
+  <PropertyGroup Condition="'$(Microsoft_Direct3D_DXC_SkipIncludeDir)' != 'true'">
+    <FXCToolPath>$(MSBuildThisFileDirectory)bin\x64\</FXCToolPath>
+    <ExecutablePath>$(MSBuildThisFileDirectory)bin\x64;$(ExecutablePath)</ExecutablePath>
+  </PropertyGroup>
+  <ItemGroup Condition="'$(Microsoft_Direct3D_DXC_SkipLibraryCopy)' != 'true'">
+    <Content Include="$(MSBuildThisFileDirectory)bin\x64\dxcompiler.dll">
+      <Link>$(Microsoft_Direct3D_DXC_CopyLocation)%(FileName)%(Extension)</Link>
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+    <Content Include="$(MSBuildThisFileDirectory)bin\x64\dxcompiler.pdb">
+      <Link>$(Microsoft_Direct3D_DXC_CopyLocation)%(FileName)%(Extension)</Link>
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+    <Content Include="$(MSBuildThisFileDirectory)bin\x64\dxil.dll">
+      <Link>$(Microsoft_Direct3D_DXC_CopyLocation)%(FileName)%(Extension)</Link>
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+    <Content Include="$(MSBuildThisFileDirectory)bin\x64\dxil.pdb">
+      <Link>$(Microsoft_Direct3D_DXC_CopyLocation)%(FileName)%(Extension)</Link>
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+  </ItemGroup>
+</Project>
