@@ -14,10 +14,11 @@ on:
         type: boolean
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
-  build:
+  build-windows:
+    name: Build Windows x64
     runs-on: windows-2022
     timeout-minutes: 120
 
@@ -88,20 +89,179 @@ jobs:
             }
           }
 
-      - name: Upload distribution
+      - name: Create release archive
+        shell: pwsh
+        env:
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: |
+          if ($env:RELEASE_TAG -notmatch '^[A-Za-z0-9._-]+$') {
+            throw "The release tag may contain only letters, numbers, periods, underscores, and hyphens."
+          }
+
+          $install = "out\install\x64-Distribution"
+          $runtime = "out\package\dxc"
+          $symbols = "out\package\pdb"
+
+          New-Item -ItemType Directory -Force `
+            "$runtime\bin\x64", `
+            "$runtime\inc", `
+            "$runtime\lib\x64", `
+            "$symbols\x64" | Out-Null
+
+          Copy-Item "$install\build\native\bin\x64\*.exe" "$runtime\bin\x64"
+          Copy-Item "$install\build\native\bin\x64\*.dll" "$runtime\bin\x64"
+          Copy-Item "$install\build\native\lib\x64\*" "$runtime\lib\x64"
+          Copy-Item "$install\build\native\include\*" "$runtime\inc" -Recurse
+          Copy-Item "$install\LICENSE-LLVM.txt", "$install\ThirdPartyNotices.txt", "$install\ReleaseNotes.md" $runtime
+          Copy-Item "$install\build\native\bin\x64\*.pdb" "$symbols\x64"
+
+          Compress-Archive `
+            -Path "$runtime\*" `
+            -DestinationPath "dxc_$env:RELEASE_TAG.x64.zip"
+          Compress-Archive `
+            -Path "$symbols\*" `
+            -DestinationPath "pdb_$env:RELEASE_TAG.x64.zip"
+
+      - name: Upload Windows release asset
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
-          name: Microsoft.Direct3D.DXC-x64-${{ github.sha }}
-          path: out\install\x64-Distribution
+          name: release-asset-windows-x64
+          path: |
+            dxc_*.x64.zip
+            pdb_*.x64.zip
           if-no-files-found: error
           retention-days: 14
 
-      - name: Create release archive
-        shell: pwsh
+  build-linux:
+    name: Build Linux x86_64
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+
+    steps:
+      - name: Fetch DirectXShaderCompiler sources
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
+          submodules: recursive
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes clang-18 lld-18 ninja-build
+
+      - name: Configure distribution build
+        run: |
+          cmake \
+            -S . \
+            -B out/build/linux-Release \
+            -G Ninja \
+            -C cmake/caches/PredefinedParams.cmake \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_C_COMPILER=clang-18 \
+            -DCMAKE_CXX_COMPILER=clang++-18 \
+            -DLLVM_USE_LINKER=lld-18 \
+            -DLLVM_ENABLE_ASSERTIONS=Off \
+            -DHLSL_INCLUDE_TESTS=Off \
+            -DLLVM_INCLUDE_TESTS=Off \
+            -DCLANG_INCLUDE_TESTS=Off \
+            -DSPIRV_BUILD_TESTS=Off \
+            -DLLVM_PARALLEL_LINK_JOBS=1
+
+      - name: Build distribution binaries
         run: >
-          Compress-Archive
-          -Path out\install\x64-Distribution\*
-          -DestinationPath Microsoft.Direct3D.DXC-x64.zip
+          cmake
+          --build out/build/linux-Release
+          --target dxc dxcompiler dxildll dxv
+          --parallel
+
+      - name: Stage Linux distribution
+        run: |
+          build="out/build/linux-Release"
+          stage="out/package/linux_dxc.x86_x64"
+
+          install -D -m 0755 "$build/bin/dxc" "$stage/bin/dxc"
+          install -D -m 0755 "$build/bin/dxv" "$stage/bin/dxv"
+          install -D -m 0755 "$build/lib/libdxcompiler.so" "$stage/lib/libdxcompiler.so"
+          install -D -m 0755 "$build/lib/libdxil.so" "$stage/lib/libdxil.so"
+
+          install -D -m 0644 include/dxc/dxcapi.h "$stage/include/dxcapi.h"
+          install -D -m 0644 include/dxc/dxcerrors.h "$stage/include/dxcerrors.h"
+          install -D -m 0644 include/dxc/dxcisense.h "$stage/include/dxcisense.h"
+          install -D -m 0644 include/dxc/dxcpix.h "$stage/include/dxcpix.h"
+          install -D -m 0644 include/dxc/WinAdapter.h "$stage/include/WinAdapter.h"
+          install -D -m 0644 include/dxc/Support/ErrorCodes.h "$stage/include/Support/ErrorCodes.h"
+
+          install -D -m 0644 tools/clang/lib/Headers/hlsl/LICENSE.txt "$stage/include/hlsl/LICENCE.txt"
+          install -D -m 0644 tools/clang/lib/Headers/hlsl/README.txt "$stage/include/hlsl/README.txt"
+          install -D -m 0644 tools/clang/lib/Headers/hlsl/vk/opcode_selector.h "$stage/include/hlsl/vk/opcode_selector.h"
+          install -D -m 0644 tools/clang/lib/Headers/hlsl/vk/spirv.h "$stage/include/hlsl/vk/spirv.h"
+          install -D -m 0644 tools/clang/lib/Headers/hlsl/vk/khr/cooperative_matrix.h "$stage/include/hlsl/vk/khr/cooperative_matrix.h"
+          install -D -m 0644 tools/clang/lib/Headers/hlsl/vk/khr/cooperative_matrix.impl "$stage/include/hlsl/vk/khr/cooperative_matrix.impl"
+
+          install -m 0644 LICENSE.TXT "$stage/LICENSE-LLVM.txt"
+          install -m 0644 ThirdPartyNotices.txt "$stage/ThirdPartyNotices.txt"
+          install -m 0644 docs/ReleaseNotes.md "$stage/ReleaseNotes.md"
+
+      - name: Verify Linux distribution
+        run: |
+          stage="out/package/linux_dxc.x86_x64"
+
+          file "$stage/bin/dxc" "$stage/bin/dxv" "$stage/lib/libdxcompiler.so" "$stage/lib/libdxil.so"
+          if ldd "$stage/bin/dxc" | tee dxc-ldd.txt | grep --quiet "not found"; then
+            cat dxc-ldd.txt
+            exit 1
+          fi
+          "$stage/bin/dxc" -help > /dev/null
+          nm --dynamic --defined-only "$stage/lib/libdxcompiler.so" |
+            grep " DxcCreateInstance" > /dev/null
+          nm --dynamic --defined-only "$stage/lib/libdxil.so" |
+            grep " DxcCreateInstance" > /dev/null
+
+          printf 'float4 main() : SV_Target { return 1.0; }\n' > smoke.hlsl
+          "$stage/bin/dxc" -T ps_6_0 -E main smoke.hlsl -Fo smoke.dxil
+          "$stage/bin/dxc" -T ps_6_0 -E main -spirv smoke.hlsl -Fo smoke.spv
+          test -s smoke.dxil
+          test -s smoke.spv
+
+          printf '#include "dxcapi.h"\nint main() { return 0; }\n' |
+            clang++-18 -x c++ -I "$stage/include" -c -o dxcapi-smoke.o -
+
+      - name: Create Linux release archive
+        env:
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: |
+          if [[ ! "$RELEASE_TAG" =~ ^[A-Za-z0-9._-]+$ ]]; then
+            echo "The release tag may contain only letters, numbers, periods, underscores, and hyphens." >&2
+            exit 1
+          fi
+          release_dir="linux_dxc_${RELEASE_TAG}.x86_x64"
+          mv out/package/linux_dxc.x86_x64 "out/package/$release_dir"
+          tar -C out/package -czf "$release_dir.tar.gz" "$release_dir"
+
+      - name: Upload Linux release asset
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: release-asset-linux-x86_64
+          path: linux_dxc_*.x86_x64.tar.gz
+          if-no-files-found: error
+          retention-days: 14
+
+  release:
+    name: Create GitHub release
+    needs:
+      - build-windows
+      - build-linux
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download release assets
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: release-asset-*
+          path: release-assets
+          merge-multiple: true
 
       - name: Create GitHub release
         shell: pwsh
@@ -110,9 +270,14 @@ jobs:
           RELEASE_TAG: ${{ inputs.release_tag }}
           IS_PRERELEASE: ${{ inputs.prerelease }}
         run: |
-          $arguments = @(
-            "release", "create", $env:RELEASE_TAG,
-            "Microsoft.Direct3D.DXC-x64.zip",
+          $assets = @(Get-ChildItem -LiteralPath release-assets -File)
+          if ($assets.Count -ne 3) {
+            throw "Expected three release assets, found $($assets.Count)."
+          }
+
+          $arguments = @("release", "create", $env:RELEASE_TAG)
+          $arguments += $assets.FullName
+          $arguments += @(
             "--repo", $env:GITHUB_REPOSITORY,
             "--target", $env:GITHUB_SHA,
             "--title", $env:RELEASE_TAG,
