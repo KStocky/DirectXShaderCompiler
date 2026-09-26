@@ -1,0 +1,87 @@
+name: "Build dxcompiler distribution"
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-2022
+    timeout-minutes: 120
+
+    steps:
+      - name: Fetch DirectXShaderCompiler sources
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
+          submodules: recursive
+
+      - name: Configure distribution build
+        shell: cmd
+        run: |
+          call "%ProgramFiles%\Microsoft Visual Studio\2022\Enterprise\Common7\Tools\VsDevCmd.bat" -arch=x64 -host_arch=x64
+          cmake -S . -B out\build\x64-Distribution -G Ninja ^
+            -C cmake\caches\PredefinedParams.cmake ^
+            -DCMAKE_BUILD_TYPE=Release ^
+            -DLLVM_ENABLE_ASSERTIONS=Off ^
+            -DHLSL_INCLUDE_TESTS=Off ^
+            -DLLVM_INCLUDE_TESTS=Off ^
+            -DCLANG_INCLUDE_TESTS=Off ^
+            -DSPIRV_BUILD_TESTS=Off ^
+            -DDXC_ENABLE_NUGET_LAYOUT=On ^
+            -DDXC_NUGET_ARCHITECTURE=x64 ^
+            -DCMAKE_LINKER_TYPE=MSVC ^
+            -DCMAKE_AR:FILEPATH="%VCToolsInstallDir%bin\Hostx64\x64\lib.exe" ^
+            -DCMAKE_INSTALL_PREFIX="%GITHUB_WORKSPACE%\out\install\x64-Distribution" ^
+            -DCMAKE_SHARED_LINKER_FLAGS_RELEASE="/DEBUG /INCREMENTAL:NO /OPT:REF /OPT:ICF"
+
+      - name: Build and install distribution
+        shell: cmd
+        run: |
+            call "%ProgramFiles%\Microsoft Visual Studio\2022\Enterprise\Common7\Tools\VsDevCmd.bat" -arch=x64 -host_arch=x64
+            cmake --build out\build\x64-Distribution --target install-dxc-nuget --parallel
+
+      - name: Verify distribution
+        shell: pwsh
+        run: |
+          Add-Type -TypeDefinition @'
+          using System;
+          using System.Runtime.InteropServices;
+
+          public static class NativeLibrary {
+            [DllImport("kernel32", CharSet = CharSet.Unicode, SetLastError = true)]
+            public static extern IntPtr LoadLibrary(string fileName);
+
+            [DllImport("kernel32", CharSet = CharSet.Ansi, SetLastError = true)]
+            public static extern IntPtr GetProcAddress(IntPtr module, string procedureName);
+
+            [DllImport("kernel32", SetLastError = true)]
+            public static extern bool FreeLibrary(IntPtr module);
+          }
+          '@
+
+          foreach ($name in "dxcompiler.dll", "dxil.dll") {
+            $dll = (Resolve-Path "out/install/x64-Distribution/build/native/bin/x64/$name").Path
+            $module = [NativeLibrary]::LoadLibrary($dll)
+            if ($module -eq [IntPtr]::Zero) {
+              throw "Unable to load $name (Win32 error $([Runtime.InteropServices.Marshal]::GetLastWin32Error()))."
+            }
+
+            try {
+              if ([NativeLibrary]::GetProcAddress($module, "DxcCreateInstance") -eq [IntPtr]::Zero) {
+                throw "$name does not export DxcCreateInstance."
+              }
+            } finally {
+              [void][NativeLibrary]::FreeLibrary($module)
+            }
+          }
+
+      - name: Upload distribution
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: Microsoft.Direct3D.DXC-x64-${{ github.sha }}
+          path: out/install/x64-Distribution
+          if-no-files-found: error
+          retention-days: 14
